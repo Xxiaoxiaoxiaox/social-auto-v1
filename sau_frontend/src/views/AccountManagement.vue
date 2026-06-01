@@ -505,15 +505,21 @@ const validateAllAccountsInBackground = async () => {
   }, 0)
 }
 
+// 标记是否已验证过账号（避免每次进入页面都启动浏览器验证）
+const hasValidated = ref(false)
+
 // 页面加载时获取账号数据
 onMounted(() => {
   // 快速获取账号列表（不验证），立即显示
   fetchAccountsQuick()
 
-  // 在后台验证所有账号
-  setTimeout(() => {
-    validateAllAccountsInBackground()
-  }, 100) // 稍微延迟一下，让用户看到快速加载的效果
+  // 仅在首次进入时后台验证所有账号
+  if (!hasValidated.value) {
+    hasValidated.value = true
+    setTimeout(() => {
+      validateAllAccountsInBackground()
+    }, 100)
+  }
 })
 
 // 获取平台标签类型

@@ -379,22 +379,27 @@ def delete_account():
 def login():
     # 1 小红书 2 视频号 3 抖音 4 快手
     type = request.args.get('type')
-    # 账号名
     id = request.args.get('id')
 
-    # 模拟一个用于异步通信的队列
+    # 防重复登录：如果同名账号已有登录进行中，先取消旧的
+    old_queue = active_queues.pop(id, None)
+    if old_queue is not None:
+        print(f"⚠️ 重复登录请求，取消旧队列: {id}")
+        old_queue.put("CANCEL")
+
     status_queue = Queue()
     active_queues[id] = status_queue
 
+    thread = threading.Thread(target=run_async_function, args=(type, id, status_queue), daemon=True)
+    thread.start()
+
     def on_close():
         print(f"清理队列: {id}")
-        del active_queues[id]
-    # 启动异步任务线程
-    thread = threading.Thread(target=run_async_function, args=(type,id,status_queue), daemon=True)
-    thread.start()
-    response = Response(sse_stream(status_queue,), mimetype='text/event-stream')
+        active_queues.pop(id, None)
+
+    response = Response(sse_stream(status_queue, on_close=on_close), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-cache'
-    response.headers['X-Accel-Buffering'] = 'no'  # 关键：禁用 Nginx 缓冲
+    response.headers['X-Accel-Buffering'] = 'no'
     response.headers['Content-Type'] = 'text/event-stream'
     response.headers['Connection'] = 'keep-alive'
     return response
@@ -680,38 +685,61 @@ def download_cookie():
 
 
 # 包装函数：在线程中运行异步函数
-def run_async_function(type,id,status_queue):
-    match type:
-        case '1':
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(xiaohongshu_cookie_gen(id, status_queue))
-            loop.close()
-        case '2':
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(get_tencent_cookie(id,status_queue))
-            loop.close()
-        case '3':
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(douyin_cookie_gen(id,status_queue))
-            loop.close()
-        case '4':
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(get_ks_cookie(id,status_queue))
-            loop.close()
+def run_async_function(type, id, status_queue):
+    try:
+        match type:
+            case '1':
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(xiaohongshu_cookie_gen(id, status_queue))
+                loop.close()
+            case '2':
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(get_tencent_cookie(id, status_queue))
+                loop.close()
+            case '3':
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(douyin_cookie_gen(id, status_queue))
+                loop.close()
+            case '4':
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(get_ks_cookie(id, status_queue))
+                loop.close()
+    except Exception as e:
+        print(f"❌ run_async_function 异常: {e}")
+        import traceback
+        traceback.print_exc()
+        status_queue.put("500")
+
 
 # SSE 流生成器函数
-def sse_stream(status_queue):
-    while True:
-        if not status_queue.empty():
-            msg = status_queue.get()
-            yield f"data: {msg}\n\n"
-        else:
-            # 避免 CPU 占满
-            time.sleep(0.1)
+def sse_stream(status_queue, keepalive_sec=15, on_close=None):
+    last_sent = time.time()
+    try:
+        while True:
+            sent_something = False
+            if not status_queue.empty():
+                msg = status_queue.get()
+                is_terminal = msg in ("200", "500", "CANCEL")
+                yield f"data: {msg}\n\n"
+                sent_something = True
+                if is_terminal:
+                    # 发送完状态码后退出，不再发送 keepalive
+                    break
+            elif time.time() - last_sent > keepalive_sec:
+                yield ": keepalive\n\n"
+                sent_something = True
+
+            if sent_something:
+                last_sent = time.time()
+            else:
+                time.sleep(0.1)
+    finally:
+        if on_close:
+            on_close()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0' ,port=5409)

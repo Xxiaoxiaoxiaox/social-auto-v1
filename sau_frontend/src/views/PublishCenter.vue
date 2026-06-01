@@ -257,7 +257,16 @@
             class="account-dialog"
           >
             <div class="account-dialog-content">
-              <el-checkbox-group v-model="tempSelectedAccounts">
+              <div v-if="availableAccounts.length === 0" class="no-accounts-hint">
+                <el-alert
+                  title="当前平台没有可用账号"
+                  :description="`请先在「账号管理」添加${platformName}账号，或切换到其他平台`"
+                  type="warning"
+                  show-icon
+                  :closable="false"
+                />
+              </div>
+              <el-checkbox-group v-model="tempSelectedAccounts" v-else>
                 <div class="account-list">
                   <el-checkbox
                     v-for="account in availableAccounts"
@@ -491,12 +500,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { Upload, Plus, Close, Folder } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAccountStore } from '@/stores/account'
 import { useAppStore } from '@/stores/app'
 import { materialApi } from '@/api/material'
+import { accountApi } from '@/api/account'
 import { http } from '@/utils/request'
 
 // API base URL
@@ -582,6 +592,16 @@ const currentTab = ref(null)
 const accountStore = useAccountStore()
 
 // 根据选择的平台获取可用账号列表
+const platformName = computed(() => {
+  const platformMap = {
+    3: '抖音',
+    2: '视频号',
+    1: '小红书',
+    4: '快手'
+  }
+  return currentTab.value ? (platformMap[currentTab.value.selectedPlatform] || '') : ''
+})
+
 const availableAccounts = computed(() => {
   const platformMap = {
     3: '抖音',
@@ -996,6 +1016,20 @@ const batchPublish = async () => {
     isCancelled.value = false
   }
 }
+
+// 页面加载时获取账号数据（兼容直接访问或刷新）
+onMounted(async () => {
+  if (accountStore.accounts.length === 0) {
+    try {
+      const res = await accountApi.getAccounts()
+      if (res.code === 200 && res.data) {
+        accountStore.setAccounts(res.data)
+      }
+    } catch (error) {
+      console.error('加载账号数据失败:', error)
+    }
+  }
+})
 </script>
 
 <style lang="scss" scoped>
